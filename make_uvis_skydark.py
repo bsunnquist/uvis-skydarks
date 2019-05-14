@@ -75,7 +75,7 @@ def make_segmap(f, overwrite=True):
 
 # -----------------------------------------------------------------------------
 
-def make_skydark(files, ext=1, nproc=6, title='ext_1'):
+def make_skydark(files, ext=1, nproc=6, title='ext_1', overwrite=False):
     """
     Makes a UVIS sky dark.
     
@@ -85,54 +85,63 @@ def make_skydark(files, ext=1, nproc=6, title='ext_1'):
         The files to use to make the sky dark.
 
     ext : int
-        The UVIS SCI extension to make the sky dark for
+        The UVIS SCI extension to make the sky dark for.
 
     np : int
-        The number of processes to use when stacking
+        The number of processes to use when stacking.
 
     title : str
-        The title to pad to the output sky dark filename
+        The title to pad to the output sky dark filename.
+
+    overwrite : bool
+        Option to overwrite existing skydarks.
 
     Outputs
     -------
     skydark_{title}.fits
-        The sky dark
+        The sky dark.
     """
 
-    # Make a stack of all input data
-    print('Making a stack of the input flcs...')
-    stack = np.zeros((len(files), 2051, 4096))
-    for i,f in enumerate(files):
-        h = fits.open(f)
-        data = h[ext].data
-        #dq = h[ext+2].data
-        segmap = fits.getdata(f.replace('.fits', '_seg_ext_{}.fits'.format(ext)))
+    # See if outfile already exists
+    outfile = 'skydark_{}.fits'.format(title)
+    if (os.path.exists(outfile)) & (overwrite==False):
+        print('{} already exists, stopping...'.format(outfile))
 
-        # mask bad pixels and sources
-        #data[dq!=0] = np.nan
-        data[segmap>0] = np.nan
-        stack[i] = data
-        h.close()
-
-    # Make the skydark
-    print('Calculating the median through the stack of flcs...')
-    if nproc==1:
-        skydark = np.nanmedian(stack, axis=0)
     else:
-        stacks = np.split(stack, 16, axis=2)  # split stack into 16 2048x256 sections
-        p = Pool(nproc)
-        results = p.map(med_stack, stacks)
-        skydark = np.concatenate(results, axis=1)
+        # Make a stack of all input data
+        print('Making a stack of the input flcs...')
+        stack = np.zeros((len(files), 2051, 4096))
+        for i,f in enumerate(files):
+            h = fits.open(f)
+            data = h[ext].data
+            #dq = h[ext+2].data
+            segmap = fits.getdata(f.replace('.fits', '_seg_ext_{}.fits'.format(ext)))
 
-    # Write out the sky dark
-    fits.writeto('skydark_{}.fits'.format(title), skydark)
-    print('Sky dark generated')
+            # mask bad pixels and sources
+            #data[dq!=0] = np.nan
+            data[segmap>0] = np.nan
+            stack[i] = data
+            h.close()
 
-    # Make a filtered version of the skydark
-    print('Filtering the sky dark...')
-    filtered = medfilt(skydark, 9)
-    fits.writeto('skydark_{}_medfilt.fits'.format(title), skydark)
-    print('Filtered sky dark generated')
+        # Make the skydark
+        print('Calculating the median through the stack of flcs...')
+        if nproc==1:
+            skydark = np.nanmedian(stack, axis=0)
+        else:
+            stacks = np.split(stack, 16, axis=2)  # split stack into 16 2048x256 sections
+            p = Pool(nproc)
+            results = p.map(med_stack, stacks)
+            skydark = np.concatenate(results, axis=1)
+
+        # Write out the sky dark
+        fits.writeto(outfile, skydark, overwrite=True)
+        print('Sky dark generated')
+
+        # Make a filtered version of the skydark
+        print('Filtering the sky dark...')
+        filtered = medfilt(skydark, 9)
+        fits.writeto('{}_medfilt.fits'.format(outfile.replace('.fits','')), filtered, overwrite=True)
+        print('Filtered sky dark generated')
 
 # -----------------------------------------------------------------------------
 
@@ -144,12 +153,12 @@ def med_stack(stack):
     Parameters
     ----------
     stack : np.array
-        A 3D stack of 2D image arrays
+        A 3D stack of 2D image arrays.
     
     Returns
     -------
     med : float
-        The median value through the stack
+        The median value through the stack.
     """
 
     return np.nanmedian(stack, axis=0)
@@ -171,7 +180,8 @@ def parse_args():
     outdir_help = ('The directory containing the flcs to stack and '
                    'where to write the output skydark to.')
     nproc_help = 'The number of processes to use for multiprocessing.'
-    overwrite_help = 'Option to overwrite existing segmaps/skydarks.'
+    overwrite_skydarks_help = 'Option to overwrite existing skydarks.'
+    overwrite_segmaps_help = 'Option to overwrite existing segmaps.'
 
     # Add the potential arguments
     parser = argparse.ArgumentParser()
@@ -179,12 +189,16 @@ def parse_args():
                         required=False, help=outdir_help)
     parser.add_argument('--np', dest='nproc', action='store', type=int, 
                         required=False, help=nproc_help)
-    parser.add_argument('--overwrite', dest='overwrite', 
+    parser.add_argument('--overwrite_skydarks', dest='overwrite_skydarks', 
                         action='store_true',  required=False, 
-                        help=overwrite_help)
+                        help=overwrite_skydarks_help)
+    parser.add_argument('--overwrite_segmaps', dest='overwrite_segmaps', 
+                        action='store_true',  required=False, 
+                        help=overwrite_segmaps_help)
     
     # Set defaults
-    parser.set_defaults(outdir=os.getcwd(), nproc=6, overwrite=False)
+    parser.set_defaults(outdir=os.getcwd(), nproc=6, overwrite_skydarks=False,
+                        overwrite_segmaps=False)
 
     # Get the arguments
     args = parser.parse_args()
@@ -208,7 +222,7 @@ if __name__ == '__main__':
 
     # Make segmentation maps for each input flc
     print('Making segmentation maps for the input files...')
-    if args.overwrite==False:
+    if args.overwrite_segmaps==False:
         input_files = []
         for f in files:
             if not os.path.exists(f.replace('.fits', '_seg_ext_1.fits')):
@@ -222,8 +236,10 @@ if __name__ == '__main__':
 
     # Make the sky dark for each UVIS SCI extension
     print('Making the sky dark for extension 1...')
-    make_skydark(files, ext=1, nproc=args.nproc, title='ext_1')
+    make_skydark(files, ext=1, nproc=args.nproc, title='ext_1', 
+                 overwrite=args.overwrite_skydarks)
     print('Sky dark complete for extension 1')
     print('Making the sky dark for extension 4...')
-    make_skydark(files, ext=4, nproc=args.nproc, title='ext_4')
+    make_skydark(files, ext=4, nproc=args.nproc, title='ext_4', 
+                 overwrite=args.overwrite_skydarks)
     print('Sky dark complete for extension 4')
