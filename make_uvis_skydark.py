@@ -23,12 +23,12 @@ Notes
 import argparse
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.io import fits
-from astropy.stats import gaussian_fwhm_to_sigma
+from astropy.stats import gaussian_fwhm_to_sigma, SigmaClip
 import glob
 from multiprocessing import Pool
 import numpy as np
 import os
-from photutils import detect_sources, detect_threshold
+from photutils import detect_sources, detect_threshold, Background2D, MedianBackground
 from scipy.signal import medfilt
 
 # -----------------------------------------------------------------------------
@@ -70,7 +70,7 @@ def make_segmap(f, overwrite=True):
             sigma = 3.0 * gaussian_fwhm_to_sigma    # FWHM = 3.
             kernel = Gaussian2DKernel(sigma, x_size=3, y_size=3)
             kernel.normalize()
-            segm = detect_sources(data, threshold, npixels=5, filter_kernel=kernel)
+            segm = detect_sources(data, threshold, npixels=3, filter_kernel=kernel)
             fits.writeto(outfile, segm.data, overwrite=overwrite)
 
 # -----------------------------------------------------------------------------
@@ -100,6 +100,9 @@ def make_skydark(files, ext=1, nproc=6, title='ext_1', overwrite=False):
     -------
     skydark_{title}.fits
         The sky dark.
+    
+    skydark_{title}_filtered.fits
+        A filtered version of the sky dark.
     """
 
     # See if outfile already exists
@@ -139,8 +142,16 @@ def make_skydark(files, ext=1, nproc=6, title='ext_1', overwrite=False):
 
         # Make a filtered version of the skydark
         print('Filtering the sky dark...')
-        filtered = medfilt(skydark, 9)
-        fits.writeto('{}_medfilt.fits'.format(outfile.replace('.fits','')), filtered, overwrite=True)
+        amp1, amp2 = np.split(skydark, 2, axis=1)  # treat amps separately
+        sigma_clip = SigmaClip(sigma=3.)
+        bkg_estimator = MedianBackground()
+        bkg1 = Background2D(amp1, (100, 100), filter_size=(10, 10), 
+                            sigma_clip=sigma_clip, bkg_estimator=bkg_estimator)
+        bkg2 = Background2D(amp2, (100, 100), filter_size=(10, 10), 
+                            sigma_clip=sigma_clip, bkg_estimator=bkg_estimator)
+        filtered = np.concatenate((bkg1.background, bkg2.background), axis=1)
+        fits.writeto('{}_filtered.fits'.format(outfile.replace('.fits','')), 
+                     filtered, overwrite=True)
         print('Filtered sky dark generated')
 
 # -----------------------------------------------------------------------------
