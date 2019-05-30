@@ -1,0 +1,11 @@
+name: skydarks
+channels:
+- astropy
+- http://ssb.stsci.edu/astroconda
+- defaults
+dependencies:
+- python=3.5.4
+- astropy=2.0.2
+- numpy=1.13.1
+- photutils=0.4
+- scipy=0.19.1
