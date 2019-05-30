@@ -29,7 +29,7 @@ from multiprocessing import Pool
 import numpy as np
 import os
 from photutils import detect_sources, detect_threshold, Background2D, MedianBackground
-from scipy.signal import medfilt
+import scipy
 
 # -----------------------------------------------------------------------------
 
