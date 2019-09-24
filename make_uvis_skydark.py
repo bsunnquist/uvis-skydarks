@@ -35,7 +35,7 @@ import scipy
 
 def make_segmap(f, overwrite=True):
     """
-    Makes a segmentation map for each extension of the input UVIS flc
+    Makes a segmentation map for each extension of the input files.
     
     Parameters
     ----------
@@ -111,23 +111,27 @@ def make_skydark(files, ext=1, nproc=6, title='ext_1', overwrite=False):
         print('{} already exists, stopping...'.format(outfile))
 
     else:
-        # Make a stack of all input data
-        print('Making a stack of the input flcs...')
+        print('Making a stack of the input files...')
         stack = np.zeros((len(files), 2051, 4096))
         for i,f in enumerate(files):
             h = fits.open(f)
             data = h[ext].data
             #dq = h[ext+2].data
-            segmap = fits.getdata(f.replace('.fits', '_seg_ext_{}.fits'.format(ext)))
 
-            # mask bad pixels and sources
+            # Get the segmap for this file
+            segmap_file = f.replace('.fits', '_seg_ext_{}.fits'.format(ext))
+            if not os.path.isfile(segmap_file):  # sometimes input files are medsub
+                segmap_file = f.replace('_medsub.fits', '_seg_ext_{}.fits'.format(ext))
+            segmap = fits.getdata(segmap_file)
+
+            # Mask bad pixels and sources
             #data[dq!=0] = np.nan
             data[segmap>0] = np.nan
             stack[i] = data
             h.close()
 
         # Make the skydark
-        print('Calculating the median through the stack of flcs...')
+        print('Calculating the median through the stack of input files...')
         if nproc==1:
             skydark = np.nanmedian(stack, axis=0)
         else:
@@ -138,7 +142,7 @@ def make_skydark(files, ext=1, nproc=6, title='ext_1', overwrite=False):
 
         # Write out the sky dark
         fits.writeto(outfile, skydark, overwrite=True)
-        print('Sky dark generated')
+        print('Sky dark generated.')
 
         # Make a filtered version of the skydark
         print('Filtering the sky dark...')
@@ -152,7 +156,7 @@ def make_skydark(files, ext=1, nproc=6, title='ext_1', overwrite=False):
         filtered = np.concatenate((bkg1.background, bkg2.background), axis=1)
         fits.writeto('{}_filtered.fits'.format(outfile.replace('.fits','')), 
                      filtered, overwrite=True)
-        print('Filtered sky dark generated')
+        print('Filtered sky dark generated.')
 
 # -----------------------------------------------------------------------------
 
@@ -229,15 +233,12 @@ def subtract_skydark(f):
 
     Outputs
     -------
-    {f}_flc.fits : fits image
+    {f}_skydarksub.fits : fits image
         The file with the skydark subtracted
     """
 
-    # Make a separate directory to store these final products
+    # Store these final products in a separate directory
     final_outdir = './final/'
-    if not os.path.exists(final_outdir):
-        os.mkdir(final_outdir)
-    
     outfile = os.path.join(final_outdir, f.replace('.fits', '_skydarksub.fits'))
     if not os.path.isfile(outfile):
         # Get the skydark data
@@ -248,10 +249,10 @@ def subtract_skydark(f):
         h = fits.open(f)
         data = np.copy(h[1].data)
         data = data - skydark_ext1
-        h[1].data = data
+        h[1].data = data.astype('float32')
         data = np.copy(h[4].data)
         data = data - skydark_ext4
-        h[4].data = data
+        h[4].data = data.astype('float32')
         h.writeto(outfile)
         h.close()
     else:
@@ -271,7 +272,7 @@ def parse_args():
     """
 
     # Make the help strings
-    outdir_help = ('The directory containing the flcs to stack and '
+    outdir_help = ('The directory containing the files to stack and '
                    'where to write the output skydark to.')
     nproc_help = 'The number of processes to use for multiprocessing.'
     overwrite_skydarks_help = 'Option to overwrite existing skydarks.'
@@ -298,7 +299,7 @@ def parse_args():
                         help=no_medsub_help)
     parser.add_argument('--no_skydark_sub', dest='subtract_skydark', 
                         action='store_false',  required=False, 
-                        help=subtract_skydark_help)
+                        help=no_skydark_sub_help)
     
     # Set defaults
     parser.set_defaults(outdir=os.getcwd(), nproc=8, overwrite_skydarks=False,
@@ -321,11 +322,11 @@ if __name__ == '__main__':
     # Go to the working directory
     os.chdir(args.outdir)
 
-    # Input all of the flc files in the current directory (should all belong 
+    # Input all of the files in the current directory (should all belong 
     # to the same filter)
     files = glob.glob('*flt.fits')
 
-    # Make segmentation maps for each input flc
+    # Make segmentation maps for each input file
     print('Making segmentation maps for the input files...')
     if args.overwrite_segmaps==False:
         input_files = []
@@ -341,7 +342,7 @@ if __name__ == '__main__':
 
     # Subtract the median amp-by-amp from each input file
     if args.subtract_med==True:
-        print('Subtracting the median from each amp...')
+        print('Subtracting the median from each amp for the input files...')
         p = Pool(args.nproc)
         p.map(subtract_med, files)
         files = [f.replace('.fits', '_medsub.fits') for f in files]
@@ -358,13 +359,22 @@ if __name__ == '__main__':
 
     # Subtract the skydark from each input file
     if args.subtract_skydark==True:
+        # Make a separate directory to store the final products
+        final_outdir = './final/'
+        if not os.path.exists(final_outdir):
+            os.mkdir(final_outdir)
+        
+        # Subtract the skydark from each input file
         print('Subtracting the skydark from each input file...')
         p = Pool(args.nproc)
         p.map(subtract_skydark, files)
 
         # Rename all final files to flcs
+        print('Renaming all final products to flcs...')
         for f in glob.glob('./final/*.fits'):
-            if ars.subtract_med==True:
-                os.rename(f, f.replace('_flt_medsub_skydarksub.fits','flc.fits'))
+            if args.subtract_med==True:
+                os.rename(f, f.replace('_flt_medsub_skydarksub.fits', '_flc.fits'))
             else:
-                os.rename(f, f.replace('_flt_skydarksub.fits','flc.fits'))
+                os.rename(f, f.replace('_flt_skydarksub.fits', '_flc.fits'))
+
+    print('make_uvis_skydark.py complete.')
