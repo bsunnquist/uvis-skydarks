@@ -1,7 +1,7 @@
 #! /usr/bin/env python
 
 """
-Creates UVIS sky darks for a given filter.
+Calibrates input UVIS files by creating and subtracting a skydark.
 
 Authors
 -------
@@ -10,9 +10,9 @@ Authors
 Use
 ---
     This code should be run in the same directory as the collection
-    of UVIS flcs of a given filter. 
+    of UVIS flts of a given filter. 
 
-    To make the sky dark:
+    To run from the command line:
     >>> python make_uvis_skydark.py
 
 Notes
@@ -325,6 +325,7 @@ if __name__ == '__main__':
     # Input all of the files in the current directory (should all belong 
     # to the same filter)
     files = glob.glob('*flt.fits')
+    print('Found {} input files.'.format(len(files)))
 
     # Make segmentation maps for each input file
     print('Making segmentation maps for the input files...')
@@ -342,7 +343,7 @@ if __name__ == '__main__':
 
     # Subtract the median amp-by-amp from each input file
     if args.subtract_med==True:
-        print('Subtracting the median from each amp for the input files...')
+        print('Subtracting the median of each amp from the input files...')
         p = Pool(args.nproc)
         p.map(subtract_med, files)
         files = [f.replace('.fits', '_medsub.fits') for f in files]
