@@ -1,7 +1,9 @@
 #! /usr/bin/env python
 
 """
-Calibrates input UVIS files by creating and subtracting a skydark.
+Calibrates input UVIS files based on user inputs. Options include subtracting
+off the median of each amp from the input files (to remove any bias offset),
+and/or creating and subtracting a skydark from the input files.
 
 Authors
 -------
@@ -58,7 +60,7 @@ def make_segmap(f, overwrite=True):
     for i in [1,4]:
         # See if segmap already exists
         outfile = f.replace('.fits', '_seg_ext_{}.fits'.format(i))
-        if (os.path.exists(outfile)) & (overwrite==False):
+        if (os.path.exists(outfile)) & (overwrite is False):
             pass
 
         else:
@@ -107,7 +109,7 @@ def make_skydark(files, ext=1, nproc=6, title='ext_1', overwrite=False):
 
     # See if outfile already exists
     outfile = 'skydark_{}.fits'.format(title)
-    if (os.path.exists(outfile)) & (overwrite==False):
+    if (os.path.exists(outfile)) & (overwrite is False):
         print('{} already exists, stopping...'.format(outfile))
 
     else:
@@ -279,8 +281,8 @@ def parse_args():
     overwrite_segmaps_help = 'Option to overwrite existing segmaps.'
     no_medsub_help = ('Option to not subtract the median from each amp before '
                       'making the skydark.')
-    no_skydark_sub_help = ('Option to not subtract the skydark from final '
-                           'products.')
+    skydark_help = ('Option to make the skydark and subtract it from the '
+                    'input files.')
 
     # Add the potential arguments
     parser = argparse.ArgumentParser()
@@ -289,22 +291,21 @@ def parse_args():
     parser.add_argument('--np', dest='nproc', action='store', type=int, 
                         required=False, help=nproc_help)
     parser.add_argument('--overwrite_skydarks', dest='overwrite_skydarks', 
-                        action='store_true',  required=False, 
+                        action='store_true', required=False, 
                         help=overwrite_skydarks_help)
     parser.add_argument('--overwrite_segmaps', dest='overwrite_segmaps', 
-                        action='store_true',  required=False, 
+                        action='store_true', required=False, 
                         help=overwrite_segmaps_help)
     parser.add_argument('--no_medsub', dest='subtract_med', 
-                        action='store_false',  required=False, 
+                        action='store_false', required=False, 
                         help=no_medsub_help)
-    parser.add_argument('--no_skydark_sub', dest='subtract_skydark', 
-                        action='store_false',  required=False, 
-                        help=no_skydark_sub_help)
+    parser.add_argument('--skydark', dest='make_skydark', action='store_true', 
+                        required=False, help=skydark_help)
     
     # Set defaults
     parser.set_defaults(outdir=os.getcwd(), nproc=8, overwrite_skydarks=False,
                         overwrite_segmaps=False, subtract_med=True, 
-                        subtract_skydark=True)
+                        make_skydark=False)
 
     # Get the arguments
     args = parser.parse_args()
@@ -329,7 +330,7 @@ if __name__ == '__main__':
 
     # Make segmentation maps for each input file
     print('Making segmentation maps for the input files...')
-    if args.overwrite_segmaps==False:
+    if not args.overwrite_segmaps:
         input_files = []
         for f in files:
             if not os.path.exists(f.replace('.fits', '_seg_ext_1.fits')):
@@ -342,25 +343,25 @@ if __name__ == '__main__':
         p.map(make_segmap, input_files)
 
     # Subtract the median amp-by-amp from each input file
-    if args.subtract_med==True:
+    if args.subtract_med:
         print('Subtracting the median of each amp from the input files...')
         p = Pool(args.nproc)
         p.map(subtract_med, files)
         files = [f.replace('.fits', '_medsub.fits') for f in files]
 
-    # Make the sky dark for each UVIS SCI extension
-    print('Making the sky dark for extension 1...')
-    make_skydark(files, ext=1, nproc=args.nproc, title='ext_1', 
-                 overwrite=args.overwrite_skydarks)
-    print('Sky dark complete for extension 1')
-    print('Making the sky dark for extension 4...')
-    make_skydark(files, ext=4, nproc=args.nproc, title='ext_4', 
-                 overwrite=args.overwrite_skydarks)
-    print('Sky dark complete for extension 4')
+    # Make the sky dark for each UVIS SCI extension and subtract it
+    # from the input files.
+    if args.make_skydark:
+        print('Making the sky dark for extension 1...')
+        make_skydark(files, ext=1, nproc=args.nproc, title='ext_1', 
+                     overwrite=args.overwrite_skydarks)
+        print('Sky dark complete for extension 1')
+        print('Making the sky dark for extension 4...')
+        make_skydark(files, ext=4, nproc=args.nproc, title='ext_4', 
+                     overwrite=args.overwrite_skydarks)
+        print('Sky dark complete for extension 4')
 
-    # Subtract the skydark from each input file
-    if args.subtract_skydark==True:
-        # Make a separate directory to store the final products
+        # Make directory to store final products
         final_outdir = './final/'
         if not os.path.exists(final_outdir):
             os.mkdir(final_outdir)
@@ -373,8 +374,9 @@ if __name__ == '__main__':
         # Rename all final files to flcs
         print('Renaming all final products to flcs...')
         for f in glob.glob('./final/*.fits'):
-            if args.subtract_med==True:
-                os.rename(f, f.replace('_flt_medsub_skydarksub.fits', '_flc.fits'))
+            if args.subtract_med:
+                os.rename(f, f.replace('_flt_medsub_skydarksub.fits', 
+                                       '_flc.fits'))
             else:
                 os.rename(f, f.replace('_flt_skydarksub.fits', '_flc.fits'))
 
