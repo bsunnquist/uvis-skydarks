@@ -182,7 +182,7 @@ def med_stack(stack):
 
 # -----------------------------------------------------------------------------
 
-def subtract_med(f):
+def subtract_med(f, multiply_flat=True):
     """
     Subtracts the median from the input file amp-by-amp to remove any bias
     offset. Assumes the segmaps are in the same directory.
@@ -191,6 +191,10 @@ def subtract_med(f):
     ----------
     f : str
         The filename to process.
+
+    multiply_flat : bool
+        Option to multiply the amp medians by the flat field before 
+        subtracting it from the original image.
 
     Outputs
     -------
@@ -201,6 +205,7 @@ def subtract_med(f):
     outfile = f.replace('.fits', '_medsub.fits')
     if not os.path.isfile(outfile):
         h = fits.open(f)
+        fltr = h[0].header['FILTER']
         for i in [1,4]:
             data_orig = h[i].data
             data1_orig, data2_orig = np.split(data_orig, 2, axis=1)  # split amps
@@ -212,8 +217,17 @@ def subtract_med(f):
             data1, data2 = np.split(data, 2, axis=1)  # split amps
             
             # Subtract the median of each amp from the original data
-            data1_new = data1_orig - np.nanmedian(data1)
-            data2_new = data2_orig - np.nanmedian(data2)
+            if multiply_flat:
+                if fltr != 'F275W':
+                    print('WARNING: using F275W flat, but input file is {}'.format(fltr))
+                flat = fits.getdata('/astro/cgm/bsunnquist/flats/zcv2053hi_pfl.fits', i)  # F275W flat
+                flat1, flat2 = np.split(flat, 2, axis=1)  # split amps
+                data1_new = data1_orig - (np.nanmedian(data1) * flat1)
+                data2_new = data2_orig - (np.nanmedian(data2) * flat2)
+            else:
+                data1_new = data1_orig - np.nanmedian(data1)
+                data2_new = data2_orig - np.nanmedian(data2)
+
             data_new = np.concatenate([data1_new, data2_new], axis=1)  # recombine amps
             h[i].data = data_new
         
@@ -261,6 +275,21 @@ def subtract_skydark(f):
         print('{} already exists.'.format(outfile))
 
 # -----------------------------------------------------------------------------
+
+def wrapper_subtract_med(args):
+    """A wrapper around the subtract_med function to allow for 
+    multiprocessing.
+    
+    Parameters
+    ----------
+    args : tuple
+        A tuple containing the input arguments for the subtract_med 
+        function. See subtract_med docstring for more details.
+    """
+
+    return subtract_med(*args)
+
+# -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
 def parse_args():
@@ -283,6 +312,10 @@ def parse_args():
                       'making the skydark.')
     skydark_help = ('Option to make the skydark and subtract it from the '
                     'input files.')
+    no_multiply_flat_help = ('Option to not multiply the amp medians by the '
+                             'flat field before subtracting it from the '
+                             'original files during the median subtraction '
+                             'step.')
 
     # Add the potential arguments
     parser = argparse.ArgumentParser()
@@ -301,11 +334,14 @@ def parse_args():
                         help=no_medsub_help)
     parser.add_argument('--skydark', dest='make_skydark', action='store_true', 
                         required=False, help=skydark_help)
+    parser.add_argument('--no_multiply_flat', dest='multiply_flat', 
+                        action='store_false', required=False, 
+                        help=no_multiply_flat_help)
     
     # Set defaults
-    parser.set_defaults(outdir=os.getcwd(), nproc=8, overwrite_skydarks=False,
+    parser.set_defaults(outdir=os.getcwd(), nproc=6, overwrite_skydarks=False,
                         overwrite_segmaps=False, subtract_med=True, 
-                        make_skydark=False)
+                        make_skydark=False, multiply_flat=True)
 
     # Get the arguments
     args = parser.parse_args()
@@ -341,13 +377,18 @@ if __name__ == '__main__':
     if len(input_files) > 0:
         p = Pool(args.nproc)
         p.map(make_segmap, input_files)
+        p.close()
+        p.join()
 
     # Subtract the median amp-by-amp from each input file
     if args.subtract_med:
         print('Subtracting the median of each amp from the input files...')
         p = Pool(args.nproc)
-        p.map(subtract_med, files)
+        multiply = [args.multiply_flat] * len(files)
+        p.map(wrapper_subtract_med, zip(files, multiply))
         files = [f.replace('.fits', '_medsub.fits') for f in files]
+        p.close()
+        p.join()
 
     # Make the sky dark for each UVIS SCI extension and subtract it
     # from the input files.
@@ -370,6 +411,8 @@ if __name__ == '__main__':
         print('Subtracting the skydark from each input file...')
         p = Pool(args.nproc)
         p.map(subtract_skydark, files)
+        p.close()
+        p.join()
 
         # Rename all final files to flcs
         print('Renaming all final products to flcs...')
