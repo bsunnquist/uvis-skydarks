@@ -205,7 +205,9 @@ def subtract_med(f, multiply_flat=True):
     outfile = f.replace('.fits', '_medsub.fits')
     if not os.path.isfile(outfile):
         h = fits.open(f)
-        fltr = h[0].header['FILTER']
+        if multiply_flat:
+            flat_file = os.path.join(os.environ['iref'], 
+                                     h[0].header['PFLTFILE'].replace('iref$', ''))
         for i in [1,4]:
             data_orig = h[i].data
             data1_orig, data2_orig = np.split(data_orig, 2, axis=1)  # split amps
@@ -218,9 +220,7 @@ def subtract_med(f, multiply_flat=True):
             
             # Subtract the median of each amp from the original data
             if multiply_flat:
-                if fltr != 'F275W':
-                    print('WARNING: using F275W flat, but input file is {}'.format(fltr))
-                flat = fits.getdata('/astro/cgm/bsunnquist/flats/zcv2053hi_pfl.fits', i)  # F275W flat
+                flat = fits.getdata(flat_file, i)
                 flat1, flat2 = np.split(flat, 2, axis=1)  # split amps
                 data1_new = data1_orig - (np.nanmedian(data1) * flat1)
                 data2_new = data2_orig - (np.nanmedian(data2) * flat2)
