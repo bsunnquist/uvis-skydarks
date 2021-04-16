@@ -2,8 +2,8 @@
 
 """
 Calibrates input UVIS files based on user inputs. Options include subtracting
-off the median of each amp from the input files (to remove any bias offset),
-and/or creating and subtracting a skydark from the input files.
+off the median of each amp from the input files or equalizing the amps (to remove 
+any bias offset), and/or creating and subtracting a skydark from the input files.
 
 Authors
 -------
@@ -32,6 +32,76 @@ import numpy as np
 import os
 from photutils import detect_sources, detect_threshold, Background2D, MedianBackground
 import scipy
+
+# -----------------------------------------------------------------------------
+
+def equalize_amps(f, multiply_flat=True):
+    """
+    Equalizes the amp levels in each input file to the average amp level. 
+    Assumes the segmaps are in the same directory.
+    
+    Parameters
+    ----------
+    f : str
+        The filename to process.
+
+    multiply_flat : bool
+        Option to multiply the amp offsets by the flat field before 
+        subtracting it from the original image.
+
+    Outputs
+    -------
+    {f}_equalized.fits : fits image
+        The input file with the amps equalized.
+    """
+    
+    outfile = f.replace('.fits', '_equalized.fits')
+    if not os.path.isfile(outfile):
+        h = fits.open(f)
+        if multiply_flat:
+            flat_file = os.path.join(os.environ['iref'], 
+                                     h[0].header['PFLTFILE'].replace('iref$', ''))
+        
+        # Get the average amp level
+        amp_levels = []
+        for i in [1,4]:
+            data = np.copy(h[i].data)
+            segmap = fits.getdata(f.replace('.fits', '_seg_ext_{}.fits'.format(i)))
+            data[segmap > 0] = np.nan  # flag sources
+            data1, data2 = np.split(data, 2, axis=1)  # split amps
+            amp_levels.append(np.nanmedian(data1))
+            amp_levels.append(np.nanmedian(data2))
+        amp_average = np.nanmean(amp_levels)
+
+        # Subtract the offset from the average amp level from each amp
+        for i in [1,4]:
+            data_orig = np.copy(h[i].data)
+            data1_orig, data2_orig = np.split(data_orig, 2, axis=1)  # split amps
+            
+            # Make copies of the original data with sources flagged
+            data = np.copy(data_orig)
+            segmap = fits.getdata(f.replace('.fits', '_seg_ext_{}.fits'.format(i)))
+            data[segmap > 0] = np.nan  # flag sources
+            data1, data2 = np.split(data, 2, axis=1)  # split amps
+            
+            # Subtract the offset of each amp from the average from the original data
+            if multiply_flat:
+                flat = fits.getdata(flat_file, i)
+                flat1, flat2 = np.split(flat, 2, axis=1)  # split amps
+                data1_new = data1_orig - ((np.nanmedian(data1) - amp_average) * flat1)
+                data2_new = data2_orig - ((np.nanmedian(data2) - amp_average) * flat2)
+            else:
+                data1_new = data1_orig - (np.nanmedian(data1) - amp_average)
+                data2_new = data2_orig - (np.nanmedian(data2) - amp_average)
+
+            data_new = np.concatenate([data1_new, data2_new], axis=1)  # recombine amps
+            h[i].data = data_new
+        
+        h.writeto(outfile, overwrite=True)
+        h.close()
+
+    else:
+        print('{} already exists.'.format(outfile))
 
 # -----------------------------------------------------------------------------
 
@@ -122,8 +192,8 @@ def make_skydark(files, ext=1, nproc=6, title='ext_1', overwrite=False):
 
             # Get the segmap for this file
             segmap_file = f.replace('.fits', '_seg_ext_{}.fits'.format(ext))
-            if not os.path.isfile(segmap_file):  # sometimes input files are medsub
-                segmap_file = f.replace('_medsub.fits', '_seg_ext_{}.fits'.format(ext))
+            if not os.path.isfile(segmap_file):  # sometimes input files are medsub/equalized
+                segmap_file = f.replace('_medsub', '').replace('_equalized', '').replace('.fits', '_seg_ext_{}.fits'.format(ext))
             segmap = fits.getdata(segmap_file)
 
             # Mask bad pixels and sources
@@ -276,6 +346,21 @@ def subtract_skydark(f):
 
 # -----------------------------------------------------------------------------
 
+def wrapper_equalize_amps(args):
+    """A wrapper around the equalize_amps function to allow for 
+    multiprocessing.
+    
+    Parameters
+    ----------
+    args : tuple
+        A tuple containing the input arguments for the equalize_amps 
+        function. See equalize_amps docstring for more details.
+    """
+
+    return equalize_amps(*args)
+
+# -----------------------------------------------------------------------------
+
 def wrapper_subtract_med(args):
     """A wrapper around the subtract_med function to allow for 
     multiprocessing.
@@ -308,6 +393,7 @@ def parse_args():
     nproc_help = 'The number of processes to use for multiprocessing.'
     overwrite_skydarks_help = 'Option to overwrite existing skydarks.'
     overwrite_segmaps_help = 'Option to overwrite existing segmaps.'
+    no_equalize_help = 'Option to not equalize the amps before making the skydark.'
     no_medsub_help = ('Option to not subtract the median from each amp before '
                       'making the skydark.')
     skydark_help = ('Option to make the skydark and subtract it from the '
@@ -329,6 +415,9 @@ def parse_args():
     parser.add_argument('--overwrite_segmaps', dest='overwrite_segmaps', 
                         action='store_true', required=False, 
                         help=overwrite_segmaps_help)
+    parser.add_argument('--no_equalize', dest='equalize_amps', 
+                        action='store_false', required=False, 
+                        help=no_equalize_help)    
     parser.add_argument('--no_medsub', dest='subtract_med', 
                         action='store_false', required=False, 
                         help=no_medsub_help)
@@ -340,7 +429,7 @@ def parse_args():
     
     # Set defaults
     parser.set_defaults(outdir=os.getcwd(), nproc=6, overwrite_skydarks=False,
-                        overwrite_segmaps=False, subtract_med=True, 
+                        overwrite_segmaps=False, equalize_amps=True, subtract_med=False, 
                         make_skydark=False, multiply_flat=True)
 
     # Get the arguments
@@ -361,7 +450,7 @@ if __name__ == '__main__':
 
     # Input all of the files in the current directory (should all belong 
     # to the same filter)
-    files = glob.glob('*flt.fits')
+    files = glob.glob('*flc.fits')
     print('Found {} input files.'.format(len(files)))
 
     # Make segmentation maps for each input file
@@ -377,6 +466,16 @@ if __name__ == '__main__':
     if len(input_files) > 0:
         p = Pool(args.nproc)
         p.map(make_segmap, input_files)
+        p.close()
+        p.join()
+
+    # Equalize the overall background levels in each amp to the average
+    if args.equalize_amps:
+        print('Equalizing the amps in each input file...')
+        p = Pool(args.nproc)
+        multiply = [args.multiply_flat] * len(files)
+        p.map(wrapper_equalize_amps, zip(files, multiply))
+        files = [f.replace('.fits', '_equalized.fits') for f in files]
         p.close()
         p.join()
 
@@ -417,10 +516,7 @@ if __name__ == '__main__':
         # Rename all final files to flcs
         print('Renaming all final products to flcs...')
         for f in glob.glob('./final/*.fits'):
-            if args.subtract_med:
-                os.rename(f, f.replace('_flt_medsub_skydarksub.fits', 
-                                       '_flc.fits'))
-            else:
-                os.rename(f, f.replace('_flt_skydarksub.fits', '_flc.fits'))
+            outfile = f.replace('_medsub', '').replace('_equalized', '').replace('_skydarksub', '').replace('_flt.fits', '_flc.fits')
+            os.rename(f, outfile)
 
     print('make_uvis_skydark.py complete.')
