@@ -51,11 +51,11 @@ def equalize_amps(f, multiply_flat=True):
 
     Outputs
     -------
-    {f}_equalized.fits : fits image
+    {f}_eq.fits : fits image
         The input file with the amps equalized.
     """
     
-    outfile = f.replace('.fits', '_equalized.fits')
+    outfile = f.replace('.fits', '_eq.fits')
     if not os.path.isfile(outfile):
         h = fits.open(f)
         if multiply_flat:
@@ -193,7 +193,7 @@ def make_skydark(files, ext=1, nproc=6, title='ext_1', overwrite=False):
             # Get the segmap for this file
             segmap_file = f.replace('.fits', '_seg_ext_{}.fits'.format(ext))
             if not os.path.isfile(segmap_file):  # sometimes input files are medsub/equalized
-                segmap_file = f.replace('_medsub', '').replace('_equalized', '').replace('.fits', '_seg_ext_{}.fits'.format(ext))
+                segmap_file = f.replace('_medsub', '').replace('_eq', '').replace('.fits', '_seg_ext_{}.fits'.format(ext))
             segmap = fits.getdata(segmap_file)
 
             # Mask bad pixels and sources
@@ -475,7 +475,7 @@ if __name__ == '__main__':
         p = Pool(args.nproc)
         multiply = [args.multiply_flat] * len(files)
         p.map(wrapper_equalize_amps, zip(files, multiply))
-        files = [f.replace('.fits', '_equalized.fits') for f in files]
+        files = [f.replace('.fits', '_eq.fits') for f in files]
         p.close()
         p.join()
 
@@ -516,7 +516,7 @@ if __name__ == '__main__':
         # Rename all final files to flcs
         print('Renaming all final products to flcs...')
         for f in glob.glob('./final/*.fits'):
-            outfile = f.replace('_medsub', '').replace('_equalized', '').replace('_skydarksub', '').replace('_flt.fits', '_flc.fits')
+            outfile = f.replace('_medsub', '').replace('_eq', '').replace('_skydarksub', '').replace('_flt.fits', '_flc.fits')
             os.rename(f, outfile)
 
     print('make_uvis_skydark.py complete.')
